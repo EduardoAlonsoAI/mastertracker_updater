@@ -1,6 +1,5 @@
 from google.oauth2 import service_account
-from google.oauth2 import service_account
-from google.cloud import bigquery
+import pandas_gbq
 import streamlit as st
 import pandas as pd
 import io
@@ -133,30 +132,31 @@ if map_category is not None:
                     # 2. Creamos el botón para enviar a BQ
                     if st.button(f"🚀 Subir {uploaded_file.name} a BigQuery", key=f"bq_A_{uploaded_file.name}"):
                         with st.spinner("Subiendo a BigQuery vía CSV..."):
-                            
+                        
                             # 1. Jalamos las credenciales secretas
                             creds_dict = st.secrets["gcp_service_account"]
                             credentials = service_account.Credentials.from_service_account_info(creds_dict)
-                            
-                            # 2. Creamos el cliente oficial de BigQuery
                             client = bigquery.Client(credentials=credentials, project=creds_dict["project_id"])
                             
-                            # 3. Configuramos el trabajo para decirle a BigQuery: "Oye, te mando un CSV sin encabezados, solo añádelo"
+                            # 2. CONVERTIMOS EL DATAFRAME A UN ARCHIVO VIRTUAL (BYTES)
+                            # Esto es lo que te estaba faltando para que no de error de "DataFrame"
+                            csv_como_texto = processed_df_A.to_csv(index=False, header=False)
+                            csv_como_bytes = csv_como_texto.encode('utf-8')
+                            archivo_virtual = io.BytesIO(csv_como_bytes)
+                            
+                            # 3. Configuramos el trabajo para decirle a BigQuery que es un CSV puro
                             job_config = bigquery.LoadJobConfig(
                                 source_format=bigquery.SourceFormat.CSV,
-                                skip_leading_rows=0, # 0 porque ya le quitamos el encabezado en el paso anterior
+                                skip_leading_rows=0, 
                                 write_disposition=bigquery.WriteDisposition.WRITE_APPEND,
                             )
                             
-                            # 4. Convertimos la data de nuestro CSV a un formato de "archivo virtual"
-                            csv_file = io.BytesIO(processed_df_A)
-                            
-                            # 5. ¡Enviamos el archivo directo a la tabla!
-                            table_id = 'didi_db.Daily DB 100268' # <-- PON TU TABLA AQUÍ (ej. mi_proyecto.mi_dataset.mi_tabla)
-                            job = client.load_table_from_file(csv_file, table_id, job_config=job_config)
+                            # 4. ¡Enviamos el archivo directo a la tabla!
+                            table_id = 'didi_db.Daily DB 100268' # <-- PON TU TABLA AQUÍ
+                            job = client.load_table_from_file(archivo_virtual, table_id, job_config=job_config)
                             
                             job.result() # Esperamos a que BigQuery nos confirme que ya terminó
-                            
+                        
                         st.success("¡Subido con éxito a BigQuery! 🎉")
                     
                 except Exception as e:
@@ -179,30 +179,31 @@ if map_category is not None:
                     # 2. Creamos el botón para enviar a BQ
                     if st.button(f"🚀 Subir {uploaded_file.name} a BigQuery", key=f"bq_A_{uploaded_file.name}"):
                         with st.spinner("Subiendo a BigQuery vía CSV..."):
-                            
+                        
                             # 1. Jalamos las credenciales secretas
                             creds_dict = st.secrets["gcp_service_account"]
                             credentials = service_account.Credentials.from_service_account_info(creds_dict)
-                            
-                            # 2. Creamos el cliente oficial de BigQuery
                             client = bigquery.Client(credentials=credentials, project=creds_dict["project_id"])
                             
-                            # 3. Configuramos el trabajo para decirle a BigQuery: "Oye, te mando un CSV sin encabezados, solo añádelo"
+                            # 2. CONVERTIMOS EL DATAFRAME A UN ARCHIVO VIRTUAL (BYTES)
+                            # Esto es lo que te estaba faltando para que no de error de "DataFrame"
+                            csv_como_texto = processed_df_B.to_csv(index=False, header=False)
+                            csv_como_bytes = csv_como_texto.encode('utf-8')
+                            archivo_virtual = io.BytesIO(csv_como_bytes)
+                            
+                            # 3. Configuramos el trabajo para decirle a BigQuery que es un CSV puro
                             job_config = bigquery.LoadJobConfig(
                                 source_format=bigquery.SourceFormat.CSV,
-                                skip_leading_rows=0, # 0 porque ya le quitamos el encabezado en el paso anterior
+                                skip_leading_rows=0, 
                                 write_disposition=bigquery.WriteDisposition.WRITE_APPEND,
                             )
                             
-                            # 4. Convertimos la data de nuestro CSV a un formato de "archivo virtual"
-                            csv_file = io.BytesIO(processed_df_B)
-                            
-                            # 5. ¡Enviamos el archivo directo a la tabla!
-                            table_id = 'didi_db.Daily DB 100268' # <-- PON TU TABLA AQUÍ (ej. mi_proyecto.mi_dataset.mi_tabla)
-                            job = client.load_table_from_file(csv_file, table_id, job_config=job_config)
+                            # 4. ¡Enviamos el archivo directo a la tabla!
+                            table_id = 'didi_db.Daily DB 100268' # <-- PON TU TABLA AQUÍ
+                            job = client.load_table_from_file(archivo_virtual, table_id, job_config=job_config)
                             
                             job.result() # Esperamos a que BigQuery nos confirme que ya terminó
-                            
+                        
                         st.success("¡Subido con éxito a BigQuery! 🎉")
 
                 except Exception as e:
