@@ -4,10 +4,10 @@ import streamlit as st
 import pandas as pd
 import io
 
-st.set_page_config(page_title="BigQuery CSV Transformer", layout="wide")
+st.set_page_config(page_title="Master tracker updater", layout="wide")
 
 st.title("🚀 BigQuery CSV Transformer")
-st.markdown("Sube tus archivos CSV/XLSX. Navega entre las pestañas para elegir qué formato de tabla quieres generar.")
+st.markdown("Sube tus archivos CSV/XLSX. Navega entre las pestañas para elegir qué tabla quieres actualizar.")
 
 # --- 1. Cargar Diccionarios ---
 @st.cache_data
@@ -44,10 +44,10 @@ def process_dataframe_A(df, map_category, map_cluster, map_period):
     df.iloc[:, 30] = 0
     df.iloc[:, 2] = pd.to_datetime(df.iloc[:, 2], errors='coerce').dt.strftime('%Y-%m-%d')
     
-    for col_idx in [26, 27, 28]:
-        df.iloc[:, col_idx] = df.iloc[:, col_idx].apply(
-            lambda x: f"{float(x):,.2f}" if pd.notnull(x) and str(x).replace('.','',1).isdigit() else x
-        )
+     for col_idx in [26, 27, 28]:
+        # Quitamos comas si es que el excel original ya las traía y lo convertimos a numérico
+        df.iloc[:, col_idx] = df.iloc[:, col_idx].replace({',': ''}, regex=True)
+        df.iloc[:, col_idx] = pd.to_numeric(df.iloc[:, col_idx], errors='coerce')
     
     city_col = df.iloc[:, 6].astype(str).str.strip()
     week_col = df.iloc[:, 1].astype(str).str.zfill(2)
