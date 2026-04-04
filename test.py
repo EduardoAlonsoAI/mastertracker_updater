@@ -44,7 +44,7 @@ def process_dataframe_A(df, map_category, map_cluster, map_period):
     df.iloc[:, 30] = 0
     df.iloc[:, 2] = pd.to_datetime(df.iloc[:, 2], errors='coerce').dt.strftime('%Y-%m-%d')
     
-     for col_idx in [26, 27, 28]:
+    for col_idx in [26, 27, 28]:
         # Quitamos comas si es que el excel original ya las traía y lo convertimos a numérico
         df.iloc[:, col_idx] = df.iloc[:, col_idx].replace({',': ''}, regex=True)
         df.iloc[:, col_idx] = pd.to_numeric(df.iloc[:, col_idx], errors='coerce')
