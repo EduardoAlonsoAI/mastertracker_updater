@@ -1,5 +1,6 @@
 from google.oauth2 import service_account
-import pandas_gbq
+from google.oauth2 import service_account
+from google.cloud import bigquery
 import streamlit as st
 import pandas as pd
 import io
