@@ -109,6 +109,24 @@ def process_dataframe_B(df, map_cluster, map_period):
     
     return df
 
+def clean_for_bigquery(df):
+    df_clean = df.copy()
+    for col in df_clean.columns:
+        # 1. Si es texto, intentar quitar comas y convertir a número puro
+        if df_clean[col].dtype == 'object':
+            try:
+                temp = df_clean[col].apply(lambda x: str(x).replace(',', '') if pd.notnull(x) and isinstance(x, str) else x)
+                df_clean[col] = pd.to_numeric(temp)
+            except:
+                pass # Si da error (ej. nombres de ciudades como "Querétaro"), se deja como texto
+        
+        # 2. Si es Float, lo limpiamos para que BigQuery no se confunda entre Ints y Floats
+        if pd.api.types.is_float_dtype(df_clean[col]):
+            df_clean[col] = df_clean[col].apply(
+                # f"{x:.10f}" evita la notación científica. rstrip quita los ceros y puntos inútiles al final.
+                lambda x: f"{x:.10f}".rstrip('0').rstrip('.') if pd.notnull(x) else ""
+            )
+    return df_clean
 
 # --- 3. Interfaz de Usuario (Pestañas) ---
 if map_category is not None:
@@ -173,6 +191,9 @@ if map_category is not None:
                 try:
                     df_B = pd.read_excel(uploaded_file) if uploaded_file.name.endswith('.xlsx') else pd.read_csv(uploaded_file)
                     processed_df_B = process_dataframe_B(df_B, map_cluster, map_period)
+
+                    # 2. ¡APLICAMOS LA VACUNA UNIVERSAL!
+                    processed_df_B = clean_for_bigquery(processed_df_B)
 
                     st.success(f"¡{uploaded_file.name} procesado! Listo para BigQuery.")
 
