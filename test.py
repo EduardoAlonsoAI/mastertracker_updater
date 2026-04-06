@@ -212,7 +212,7 @@ if map_category is not None:
                                     bigquery.SchemaField("pax_activ_dormant", "FLOAT"),
                                     bigquery.SchemaField("pax_activ_referral", "FLOAT"),
                                     bigquery.SchemaField("pax_activ_paid_mkt", "FLOAT"),
-                                    bigquery.SchemaField("pax_active_cross", "INTEGER"),
+                                    bigquery.SchemaField("pax_activ_cross", "INTEGER"),
                                     bigquery.SchemaField("pax_expan_mktp", "FLOAT"),
                                     bigquery.SchemaField("pax_expan_other", "FLOAT"),
                                     bigquery.SchemaField("pax_expan_employee", "FLOAT"),
