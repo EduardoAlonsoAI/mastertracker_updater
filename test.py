@@ -67,20 +67,18 @@ def process_dataframe_A(df, map_category, map_cluster, map_period):
 
 # Transformación para CSV B
 def process_dataframe_B(df, map_cluster, map_period):
-    # --- NUEVO FILTRO BLINDADO ---
+    # Filtro MX + Juarez
     subregion_col = df.iloc[:, 0].astype(str).str.strip().str.upper()
     city_name_col = df.iloc[:, 3].astype(str).str.strip()
     
-    # Buscamos 'MX' en la subregión, o 'Juarez' / 'Juárez' en el nombre de la ciudad
     mask = (subregion_col == 'MX') | (city_name_col.str.contains('Juarez|Juárez', case=False, regex=True, na=False))
     df = df[mask].copy()
     
     # 1. Conservar solo hasta la columna AP (índice 41)
     df = df.iloc[:, :42].copy()
     
-    # 2. Columna AG (Pax_active_cross, índice 32) en 0s
-    df.iloc[:, 32] = "0"
-    #df.iloc[:, 32] = df.iloc[:, 32].astype('int64')
+    # 2. Columna AG (Pax_active_cross, índice 32) en 0
+    df.iloc[:, 32] = 0
     
     # 3. Extraer valores limpios base
     city_col = df.iloc[:, 3].astype(str).str.strip() 
@@ -107,25 +105,6 @@ def process_dataframe_B(df, map_cluster, map_period):
     df['DayOfWeek_AV'] = day_of_week
     
     return df
-
-def clean_for_bigquery(df):
-    df_clean = df.copy()
-    for col in df_clean.columns:
-        # 1. Si es texto, intentar quitar comas y convertir a número puro
-        if df_clean[col].dtype == 'object':
-            try:
-                temp = df_clean[col].apply(lambda x: str(x).replace(',', '') if pd.notnull(x) and isinstance(x, str) else x)
-                df_clean[col] = pd.to_numeric(temp)
-            except:
-                pass # Si da error (ej. nombres de ciudades como "Querétaro"), se deja como texto
-        
-        # 2. Si es Float, lo limpiamos para que BigQuery no se confunda entre Ints y Floats
-        if pd.api.types.is_float_dtype(df_clean[col]):
-            df_clean[col] = df_clean[col].apply(
-                # f"{x:.10f}" evita la notación científica. rstrip quita los ceros y puntos inútiles al final.
-                lambda x: f"{x:.10f}".rstrip('0').rstrip('.') if pd.notnull(x) else ""
-            )
-    return df_clean
 
 # --- 3. Interfaz de Usuario (Pestañas) ---
 if map_category is not None:
@@ -191,21 +170,15 @@ if map_category is not None:
                     df_B = pd.read_excel(uploaded_file) if uploaded_file.name.endswith('.xlsx') else pd.read_csv(uploaded_file)
                     processed_df_B = process_dataframe_B(df_B, map_cluster, map_period)
 
-                    # 2. ¡APLICAMOS LA VACUNA UNIVERSAL!
-                    #processed_df_B = clean_for_bigquery(processed_df_B)
-
                     st.success(f"¡{uploaded_file.name} procesado! Listo para BigQuery.")
 
-                    # 2. Creamos el botón para enviar a BQ
                     if st.button(f"🚀 Subir {uploaded_file.name} a BigQuery", key=f"bq_B_{uploaded_file.name}"):
                         with st.spinner("Transformando tipos de datos y subiendo a BigQuery..."):
                             try:
-                                # 1. Credenciales
                                 creds_dict = st.secrets["gcp_service_account"]
                                 credentials = service_account.Credentials.from_service_account_info(creds_dict)
                                 client = bigquery.Client(credentials=credentials, project=creds_dict["project_id"])
                                 
-                                # 2. El Esquema Exacto
                                 bq_schema = [
                                     bigquery.SchemaField("subregion", "STRING"),
                                     bigquery.SchemaField("country_code", "STRING"),
@@ -257,41 +230,37 @@ if map_category is not None:
                                     bigquery.SchemaField("weekday_name", "STRING"),
                                 ]
 
-                                # 3. Alineamos los nombres de las columnas
                                 processed_df_B.columns = [field.name for field in bq_schema]
 
-                                # 4. EL CASTEO EXPLÍCITO (La magia pura)
+                                # 4. CASTEO EXPLÍCITO CORREGIDO Y BLINDADO
                                 for field in bq_schema:
                                     col = field.name
                                     if field.field_type == 'INTEGER':
-                                        # Usamos 'Int64' para evitar que nulos se vuelvan flotantes
                                         processed_df_B[col] = pd.to_numeric(processed_df_B[col], errors='coerce').astype('Int64')
                                     elif field.field_type == 'FLOAT':
-                                        # Limpiamos comas si existen y forzamos a float64
+                                        # Solo quitamos comas si la columna es detectada como texto ('object')
                                         if processed_df_B[col].dtype == 'object':
-                                            processed_df_B[col] = processed_df_B[col].astype(str).str.replace(',', '')
+                                            processed_df_B[col] = processed_df_B[col].astype(str).str.replace(',', '', regex=False)
                                         processed_df_B[col] = pd.to_numeric(processed_df_B[col], errors='coerce').astype('float64')
                                     elif field.field_type == 'STRING':
-                                        # Convertimos a string y limpiamos los nulos literales
                                         processed_df_B[col] = processed_df_B[col].astype(str).replace({'nan': '', 'NaN': '', 'None': ''})
 
-                                # 5. Configuramos y Subimos
                                 job_config = bigquery.LoadJobConfig(
                                     schema=bq_schema,
                                     write_disposition=bigquery.WriteDisposition.WRITE_APPEND,
                                 )
                                 
-                                table_id = 'didi_db.Burn SoT' # <-- AGREGA TU TABLA AQUÍ
+                                table_id = 'didi_db.Burn SoT' 
                                 
                                 job = client.load_table_from_dataframe(
                                     processed_df_B, table_id, job_config=job_config
                                 )
                                 
-                                job.result() # Esperamos a que termine
+                                job.result() 
                                 
                                 st.success("¡Subido con éxito a BigQuery! 🎉")
                             except Exception as e:
-                                st.error(f"Error en BigQuery: {e}")
+                                st.error(f"Error en BigQuery B: {e}")
 
                 except Exception as e:
-                    st.error(f"Error: {e}")
+                    st.error(f"Error en proceso principal B: {e}")
