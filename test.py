@@ -1,5 +1,4 @@
 from google.oauth2 import service_account
-from google.oauth2 import service_account
 from google.cloud import bigquery
 import streamlit as st
 import pandas as pd
@@ -193,21 +192,20 @@ if map_category is not None:
                     processed_df_B = process_dataframe_B(df_B, map_cluster, map_period)
 
                     # 2. ¡APLICAMOS LA VACUNA UNIVERSAL!
-                    processed_df_B = clean_for_bigquery(processed_df_B)
+                    #processed_df_B = clean_for_bigquery(processed_df_B)
 
                     st.success(f"¡{uploaded_file.name} procesado! Listo para BigQuery.")
 
                     # 2. Creamos el botón para enviar a BQ
-                    # 2. Creamos el botón para enviar a BQ
                     if st.button(f"🚀 Subir {uploaded_file.name} a BigQuery", key=f"bq_B_{uploaded_file.name}"):
-                        with st.spinner("Subiendo a BigQuery con Esquema Exacto..."):
+                        with st.spinner("Transformando tipos de datos y subiendo a BigQuery..."):
                             try:
-                                # 1. Jalamos las credenciales secretas
+                                # 1. Credenciales
                                 creds_dict = st.secrets["gcp_service_account"]
                                 credentials = service_account.Credentials.from_service_account_info(creds_dict)
                                 client = bigquery.Client(credentials=credentials, project=creds_dict["project_id"])
                                 
-                                # 2. Definimos el esquema de BigQuery EXACTO que nos pasaste
+                                # 2. El Esquema Exacto
                                 bq_schema = [
                                     bigquery.SchemaField("subregion", "STRING"),
                                     bigquery.SchemaField("country_code", "STRING"),
@@ -241,7 +239,7 @@ if map_category is not None:
                                     bigquery.SchemaField("pax_activ_dormant", "FLOAT"),
                                     bigquery.SchemaField("pax_activ_referral", "FLOAT"),
                                     bigquery.SchemaField("pax_activ_paid_mkt", "FLOAT"),
-                                    bigquery.SchemaField("pax_activ_cross", "INTEGER"),
+                                    bigquery.SchemaField("pax_active_cross", "INTEGER"),
                                     bigquery.SchemaField("pax_expan_mktp", "FLOAT"),
                                     bigquery.SchemaField("pax_expan_other", "FLOAT"),
                                     bigquery.SchemaField("pax_expan_employee", "FLOAT"),
@@ -259,24 +257,37 @@ if map_category is not None:
                                     bigquery.SchemaField("weekday_name", "STRING"),
                                 ]
 
-                                # 3. Configuramos el Job con el esquema
+                                # 3. Alineamos los nombres de las columnas
+                                processed_df_B.columns = [field.name for field in bq_schema]
+
+                                # 4. EL CASTEO EXPLÍCITO (La magia pura)
+                                for field in bq_schema:
+                                    col = field.name
+                                    if field.field_type == 'INTEGER':
+                                        # Usamos 'Int64' para evitar que nulos se vuelvan flotantes
+                                        processed_df_B[col] = pd.to_numeric(processed_df_B[col], errors='coerce').astype('Int64')
+                                    elif field.field_type == 'FLOAT':
+                                        # Limpiamos comas si existen y forzamos a float64
+                                        if processed_df_B[col].dtype == 'object':
+                                            processed_df_B[col] = processed_df_B[col].astype(str).str.replace(',', '')
+                                        processed_df_B[col] = pd.to_numeric(processed_df_B[col], errors='coerce').astype('float64')
+                                    elif field.field_type == 'STRING':
+                                        # Convertimos a string y limpiamos los nulos literales
+                                        processed_df_B[col] = processed_df_B[col].astype(str).replace({'nan': '', 'NaN': '', 'None': ''})
+
+                                # 5. Configuramos y Subimos
                                 job_config = bigquery.LoadJobConfig(
                                     schema=bq_schema,
                                     write_disposition=bigquery.WriteDisposition.WRITE_APPEND,
                                 )
                                 
-                                # OJO: Los nombres de las columnas del DataFrame DEBEN ser iguales al esquema
-                                # para usar el método load_table_from_dataframe
-                                column_names = [field.name for field in bq_schema]
-                                processed_df_B.columns = column_names
-
-                                # 4. ¡Enviamos el DataFrame directo, guiado por el esquema!
-                                table_id = 'didi_db.Daily DB 100268' # <-- PON TU TABLA AQUÍ
+                                table_id = 'didi_db.Burn SoT' # <-- AGREGA TU TABLA AQUÍ
+                                
                                 job = client.load_table_from_dataframe(
                                     processed_df_B, table_id, job_config=job_config
                                 )
                                 
-                                job.result() # Esperamos a que BigQuery confirme
+                                job.result() # Esperamos a que termine
                                 
                                 st.success("¡Subido con éxito a BigQuery! 🎉")
                             except Exception as e:
