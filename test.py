@@ -271,7 +271,7 @@ if map_category is not None:
                                 processed_df_B.columns = column_names
 
                                 # 4. ¡Enviamos el DataFrame directo, guiado por el esquema!
-                                table_id = 'TU_DATASET.TU_TABLA_B' # <-- PON TU TABLA AQUÍ
+                                table_id = 'didi_db.Daily DB 100268' # <-- PON TU TABLA AQUÍ
                                 job = client.load_table_from_dataframe(
                                     processed_df_B, table_id, job_config=job_config
                                 )
