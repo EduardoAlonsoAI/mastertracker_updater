@@ -67,7 +67,7 @@ def process_dataframe_A(df, map_category, map_cluster, map_period):
 
 # Transformación para CSV B
 def process_dataframe_B(df, map_cluster, map_period):
-    # Filtro MX + Juarez
+    # Filtro MX + Juarez + Mazatlan
     subregion_col = df.iloc[:, 0].astype(str).str.strip().str.upper()
     city_name_col = df.iloc[:, 3].astype(str).str.strip()
     
@@ -77,20 +77,40 @@ def process_dataframe_B(df, map_cluster, map_period):
     # 1. Conservar solo hasta la columna AP (índice 41)
     df = df.iloc[:, :42].copy()
     
-    # 2. Columna AG (Pax_active_cross, índice 32) en 0
+    # 2. Columna AG (Pax_active_cross, índice 32) en 0s
     df.iloc[:, 32] = 0
     
     # 3. Extraer valores limpios base
     city_col = df.iloc[:, 3].astype(str).str.strip() 
     date_col_series = pd.to_datetime(df.iloc[:, 5], errors='coerce') 
-    week_year_col = df.iloc[:, 4].astype(str).str.strip().str.split('/') 
     
     # 4. Formatear la fecha base a yyyy-mm-dd
     df.iloc[:, 5] = date_col_series.dt.strftime('%Y-%m-%d')
     
-    # 5. Generar los datos de las nuevas columnas
-    year = week_year_col.str[0].fillna(0).astype(int)
-    week = week_year_col.str[1].fillna(0).astype(int)
+    # --- LA TRAMPA ANTI-EXCEL PARA LA SEMANA Y EL AÑO ---
+    def parse_year_week(val):
+        val_str = str(val).strip()
+        # Si Excel lo corrompió y lo volvió fecha "2026-12-01 00:00:00"
+        if '-' in val_str and ':' in val_str:
+            try:
+                dt = pd.to_datetime(val_str)
+                return dt.year, dt.month  # El "mes" en realidad es nuestra semana secuestrada
+            except:
+                return 0, 0
+        # Si viene en el formato correcto "2026/14"
+        elif '/' in val_str:
+            parts = val_str.split('/')
+            try:
+                return int(parts[0]), int(parts[1])
+            except:
+                return 0, 0
+        return 0, 0
+        
+    parsed_yw = df.iloc[:, 4].apply(parse_year_week)
+    year = parsed_yw.apply(lambda x: x[0])
+    week = parsed_yw.apply(lambda x: x[1])
+    # ----------------------------------------------------
+    
     day_of_week = date_col_series.dt.day_name() 
     
     cluster = city_col.map(map_cluster).fillna("Other")
