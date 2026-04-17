@@ -71,7 +71,7 @@ def process_dataframe_B(df, map_cluster, map_period):
     subregion_col = df.iloc[:, 0].astype(str).str.strip().str.upper()
     city_name_col = df.iloc[:, 3].astype(str).str.strip()
     
-    mask = (subregion_col == 'MX') | (city_name_col.str.contains('Juarez|Juárez', case=False, regex=True, na=False)) | (city_name_col.str.contains('Mazatlan|Mazatlán', case=False, regex=True, na=False))
+    mask = (subregion_col == 'MX') | (city_name_col.str.contains('Juarez|Juárez|Mazatlan|Mazatlán', case=False, regex=True, na=False))
     df = df[mask].copy()
     
     # 1. Conservar solo hasta la columna AP (índice 41)
