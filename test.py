@@ -9,6 +9,9 @@ st.set_page_config(page_title="Master Tracker auto updater", layout="wide")
 st.title("🚀 Master Tracker auto updater")
 st.markdown("Sube tus archivos CSV/XLSX. Navega entre las pestañas para elegir qué tabla quieres actualizar.")
 
+st.link_button("📊 G sheets Bridge", "https://docs.google.com/spreadsheets/d/18q9hGVHkCwLyIrhavMoYGkxAU9ZMxuUTOS7RramILFc/edit?usp=sharing")
+st.divider() # Opcional: pone una línea divisoria para separar el encabezado del resto
+
 # --- 1. Cargar Diccionarios ---
 @st.cache_data
 def load_dicts():
