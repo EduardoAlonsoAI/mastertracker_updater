@@ -10,7 +10,7 @@ st.title("🚀 Master Tracker auto updater")
 st.markdown("Sube tus archivos CSV/XLSX. Navega entre las pestañas para elegir qué tabla quieres actualizar.")
 
 st.link_button("📊 G sheets Bridge", "https://docs.google.com/spreadsheets/d/18q9hGVHkCwLyIrhavMoYGkxAU9ZMxuUTOS7RramILFc/edit?usp=sharing")
-st.divider() # Opcional: pone una línea divisoria para separar el encabezado del resto
+st.divider() 
 
 # --- 1. Cargar Diccionarios ---
 @st.cache_data
@@ -47,8 +47,7 @@ def process_dataframe_A(df, map_category, map_cluster, map_period):
     df.iloc[:, 30] = 0
     df.iloc[:, 2] = pd.to_datetime(df.iloc[:, 2], errors='coerce').dt.strftime('%Y-%m-%d')
     
-    # 4. --- AQUÍ ESTÁ EL CAMBIO, PADRE SANTO ---
-    # En lugar de ponerle comas, obligamos a que sean números puros (floats)
+    # 4. En lugar de ponerle comas, obligamos a que sean números puros (floats)
     for col_idx in [26, 27, 28]:
         # Quitamos comas si es que el excel original ya las traía y lo convertimos a numérico
         df.iloc[:, col_idx] = df.iloc[:, col_idx].replace({',': ''}, regex=True)
@@ -93,14 +92,12 @@ def process_dataframe_B(df, map_cluster, map_period):
     # --- LA TRAMPA ANTI-EXCEL PARA LA SEMANA Y EL AÑO ---
     def parse_year_week(val):
         val_str = str(val).strip()
-        # Si Excel lo corrompió y lo volvió fecha "2026-12-01 00:00:00"
         if '-' in val_str and ':' in val_str:
             try:
                 dt = pd.to_datetime(val_str)
-                return dt.year, dt.month  # El "mes" en realidad es nuestra semana secuestrada
+                return dt.year, dt.month  
             except:
                 return 0, 0
-        # Si viene en el formato correcto "2026/14"
         elif '/' in val_str:
             parts = val_str.split('/')
             try:
@@ -142,40 +139,31 @@ if map_category is not None:
         if uploaded_files_A:
             for uploaded_file in uploaded_files_A:
                 try:
-                    # 1. Procesamos el archivo como ya lo teníamos
                     df_A = pd.read_excel(uploaded_file) if uploaded_file.name.endswith('.xlsx') else pd.read_csv(uploaded_file)
                     processed_df_A = process_dataframe_A(df_A, map_category, map_cluster, map_period)
                 
                     st.success(f"¡{uploaded_file.name} procesado! Listo para BigQuery.")
                 
-                    # 2. Creamos el botón para enviar a BQ
-                    # 2. Creamos el botón para enviar a BQ
                     if st.button(f"🚀 Subir {uploaded_file.name} a BigQuery", key=f"bq_A_{uploaded_file.name}"):
                         with st.spinner("Subiendo a BigQuery vía CSV..."):
                         
-                            # 1. Jalamos las credenciales secretas
                             creds_dict = st.secrets["gcp_service_account"]
                             credentials = service_account.Credentials.from_service_account_info(creds_dict)
                             client = bigquery.Client(credentials=credentials, project=creds_dict["project_id"])
                             
-                            # 2. CONVERTIMOS EL DATAFRAME A UN ARCHIVO VIRTUAL (BYTES)
-                            # Esto es lo que te estaba faltando para que no de error de "DataFrame"
                             csv_como_texto = processed_df_A.to_csv(index=False, header=False)
                             csv_como_bytes = csv_como_texto.encode('utf-8')
                             archivo_virtual = io.BytesIO(csv_como_bytes)
                             
-                            # 3. Configuramos el trabajo para decirle a BigQuery que es un CSV puro
                             job_config = bigquery.LoadJobConfig(
                                 source_format=bigquery.SourceFormat.CSV,
                                 skip_leading_rows=0, 
                                 write_disposition=bigquery.WriteDisposition.WRITE_APPEND,
                             )
                             
-                            # 4. ¡Enviamos el archivo directo a la tabla!
-                            table_id = 'didi_db.Daily DB 100268' # <-- PON TU TABLA AQUÍ
+                            table_id = 'didi_db.Daily DB 100268' 
                             job = client.load_table_from_file(archivo_virtual, table_id, job_config=job_config)
-                            
-                            job.result() # Esperamos a que BigQuery nos confirme que ya terminó
+                            job.result() 
                         
                         st.success("¡Subido con éxito a BigQuery! 🎉")
                     
@@ -255,11 +243,12 @@ if map_category is not None:
 
                                 processed_df_B.columns = [field.name for field in bq_schema]
 
-                                # 4. CASTEO EXPLÍCITO CORREGIDO Y BLINDADO
+                                # 4. CASTEO EXPLÍCITO CORREGIDO Y BLINDADO DEFINITIVO
                                 for field in bq_schema:
                                     col = field.name
                                     if field.field_type == 'INTEGER':
-                                        processed_df_B[col] = pd.to_numeric(processed_df_B[col], errors='coerce').astype('Int64')
+                                        # ¡AQUÍ ESTÁ LA MAGIA! Agregamos .round(0) antes de forzarlo a Int64
+                                        processed_df_B[col] = pd.to_numeric(processed_df_B[col], errors='coerce').round(0).astype('Int64')
                                     elif field.field_type == 'FLOAT':
                                         # Solo quitamos comas si la columna es detectada como texto ('object')
                                         if processed_df_B[col].dtype == 'object':
