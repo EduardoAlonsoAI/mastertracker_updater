@@ -109,25 +109,23 @@ def upsert_to_bigquery(client, df, target_table_id, primary_keys, schema=None):
     if schema:
         job_config.schema = schema
     else:
-        # BLINDAJE DEFINITIVO: Traemos el esquema exacto de la tabla destino
-        # Así BigQuery no tiene que "adivinar" y evitamos el choque STRING vs FLOAT64
         try:
             target_table = client.get_table(target_table_id)
             job_config.schema = target_table.schema
         except Exception:
-            # Plan B de rescate por si la tabla destino aún no existe
             job_config.autodetect = True
-        
-    # Subir a tabla temporal usando el esquema clonado
+            
     job = client.load_table_from_dataframe(df, temp_table_id, job_config=job_config)
     job.result() 
     
-    # Armar query MERGE
-    match_conditions = " AND ".join([f"t.{pk} = s.{pk}" for pk in primary_keys])
+    # BLINDAJE SQL: Envolvemos todas las columnas entre `backticks` para que BQ soporte los espacios
+    match_conditions = " AND ".join([f"t.`{pk}` = s.`{pk}`" for pk in primary_keys])
+    
     cols = [c for c in df.columns]
-    update_set = ", ".join([f"t.{col} = s.{col}" for col in cols if col not in primary_keys])
-    insert_cols = ", ".join(cols)
-    insert_vals = ", ".join([f"s.{col}" for col in cols])
+    
+    update_set = ", ".join([f"t.`{col}` = s.`{col}`" for col in cols if col not in primary_keys])
+    insert_cols = ", ".join([f"`{col}`" for col in cols])
+    insert_vals = ", ".join([f"s.`{col}`" for col in cols])
     
     query = f"""
     MERGE `{target_table_id}` t
