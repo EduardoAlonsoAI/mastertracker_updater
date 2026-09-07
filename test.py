@@ -9,6 +9,59 @@ import io
 # --- CONFIGURACIÓN DE PÁGINA Y UI ---
 st.set_page_config(page_title="Data Ops | Master Tracker", page_icon="🚀", layout="wide")
 
+# --- BARRA LATERAL: MANTENIMIENTO AVANZADO ---
+with st.sidebar:
+    st.header("🛠️ Mantenimiento de BD")
+    st.markdown("Herramientas de emergencia para eliminar registros repetidos o vaciar particiones de ingestas erróneas.")
+    
+    # Selector dinámico de tabla (Targets queda excluido por tener Upsert nativo)
+    tabla_mantenimiento = st.selectbox(
+        "¿Qué tabla deseas modificar?",
+        ["didi_db.Daily DB 100268", "didi_db.Burn SoT"]
+    )
+    
+    st.divider()
+    
+    st.markdown("#### 🧹 Deduplicación Automática")
+    st.caption("Borra filas repetidas (T-7 a T-1) conservando un registro único por día.")
+    if st.button("Ejecutar Deduplicación", use_container_width=True):
+        with st.spinner(f"Limpiando {tabla_mantenimiento}..."):
+            try:
+                creds_dict = st.secrets["gcp_service_account"]
+                client = bigquery.Client(credentials=service_account.Credentials.from_service_account_info(creds_dict), project=creds_dict["project_id"])
+                
+                hoy = datetime.date.today()
+                for i in range(1, 8):
+                    fecha = (hoy - datetime.timedelta(days=i)).strftime('%Y-%m-%d')
+                    query = f"""
+                    CREATE TEMP TABLE datos_limpios AS SELECT DISTINCT * FROM `{tabla_mantenimiento}` WHERE date_value = '{fecha}';
+                    DELETE FROM `{tabla_mantenimiento}` WHERE date_value = '{fecha}';
+                    INSERT INTO `{tabla_mantenimiento}` SELECT * FROM datos_limpios;
+                    """
+                    client.query(query).result()
+                st.success(f"¡Limpieza completada en `{tabla_mantenimiento}`!")
+            except Exception as e:
+                st.error(f"Error en limpieza: {e}")
+
+    st.divider()
+    
+    st.markdown("#### 🗑️ Purga Manual por Fecha")
+    st.caption("Elimina el 100% de la data de la fecha especificada.")
+    fecha_borrado = st.date_input("Fecha a purgar", value=datetime.date.today() - datetime.timedelta(days=1))
+    
+    if st.button("Purgar Data del Día", type="primary", use_container_width=True):
+        with st.spinner(f"Vaciando partición del {fecha_borrado} en {tabla_mantenimiento}..."):
+            try:
+                creds_dict = st.secrets["gcp_service_account"]
+                client = bigquery.Client(credentials=service_account.Credentials.from_service_account_info(creds_dict), project=creds_dict["project_id"])
+                
+                query = f"DELETE FROM `{tabla_mantenimiento}` WHERE date_value = '{fecha_borrado.strftime('%Y-%m-%d')}';"
+                client.query(query).result()
+                st.success(f"Partición {fecha_borrado} eliminada en `{tabla_mantenimiento}`.")
+            except Exception as e:
+                st.error(f"Fallo ejecutando purga: {e}")
+
+# --- ENCABEZADO PRINCIPAL ---
 col_head1, col_head2 = st.columns([3, 1])
 with col_head1:
     st.title("🚀 Master Tracker Auto-Updater")
@@ -43,7 +96,6 @@ map_category, map_cluster, map_period = load_dicts()
 
 # --- 2. MOTOR DE UPSERT (MERGE) PARA BIGQUERY ---
 def upsert_to_bigquery(client, df, target_table_id, primary_keys, schema=None):
-    """Sube a tabla temporal y ejecuta un MERGE para evitar duplicados en BQ."""
     dataset_id = target_table_id.split('.')[0]
     temp_table_id = f"{dataset_id}.temp_upsert_{uuid.uuid4().hex[:8]}"
     
@@ -53,11 +105,9 @@ def upsert_to_bigquery(client, df, target_table_id, primary_keys, schema=None):
     else:
         job_config.autodetect = True
         
-    # 1. Cargar temporal
     job = client.load_table_from_dataframe(df, temp_table_id, job_config=job_config)
     job.result() 
     
-    # 2. Armar query MERGE
     match_conditions = " AND ".join([f"t.{pk} = s.{pk}" for pk in primary_keys])
     cols = [c for c in df.columns]
     update_set = ", ".join([f"t.{col} = s.{col}" for col in cols if col not in primary_keys])
@@ -113,12 +163,10 @@ def process_dataframe_B(df, map_cluster, map_period):
             try:
                 dt = pd.to_datetime(val_str)
                 return dt.year, dt.month  
-            except:
-                return 0, 0
+            except: return 0, 0
         elif '/' in val_str:
             parts = val_str.split('/')
-            try:
-                return int(parts[0]), int(parts[1])
+            try: return int(parts[0]), int(parts[1])
             except: return 0, 0
         return 0, 0
         
@@ -140,11 +188,11 @@ def process_dataframe_C(df, map_period):
         df['period'] = df['calendar_week_new'].astype(str).str.zfill(2).map(map_period).fillna("Unknown")
     return df
 
-# --- 4. INTERFAZ Y WORKFLOW ---
+# --- 4. INTERFAZ DE PESTAÑAS (WORKFLOW) ---
 if map_category is not None:
     tab1, tab2, tab3 = st.tabs(["📊 Daily Metrics", "📈 Burn SoT", "🎯 Targets ROM"])
 
-    # --- PESTAÑA 1 (Daily Metrics - APPEND) ---
+    # --- PESTAÑA 1 (Daily Metrics) ---
     with tab1:
         with st.container(border=True):
             st.markdown("### 📥 Carga de Daily Metrics")
@@ -170,7 +218,7 @@ if map_category is not None:
                             st.success("¡Operación completada en BigQuery! 🎉")
                     except Exception as e: st.error(f"Error procesando {file.name}: {e}")
 
-    # --- PESTAÑA 2 (Burn SoT - APPEND) ---
+    # --- PESTAÑA 2 (Burn SoT) ---
     with tab2:
         with st.container(border=True):
             st.markdown("### 📥 Carga de Burn SoT")
@@ -211,7 +259,7 @@ if map_category is not None:
                             st.success("¡Operación completada en BigQuery! 🎉")
                     except Exception as e: st.error(f"Error procesando {file.name}: {e}")
 
-    # --- PESTAÑA 3 (Targets ROM - UPSERT/MERGE) ---
+    # --- PESTAÑA 3 (Targets ROM) ---
     with tab3:
         with st.container(border=True):
             st.markdown("### 🎯 Carga de Targets ROM")
@@ -224,58 +272,15 @@ if map_category is not None:
                         df_C = pd.read_csv(file, header=2)
                         processed_df_C = process_dataframe_C(df_C, map_period)
                         
-                        st.info(f"✅ Archivo `{file.name}` transformado (Métricas CT/CU calculadas).")
+                        st.info(f"✅ Archivo `{file.name}` transformado (Métricas nuevas calculadas).")
 
                         if st.button(f"🚀 Ejecutar Inteligente (Upsert) hacia BigQuery", key=f"bq_C_{file.name}", type="primary"):
-                            with st.spinner("Sincronizando Targets y eliminando obsoletos..."):
+                            with st.spinner("Sincronizando Targets y actualizando metas obsoletas..."):
                                 creds_dict = st.secrets["gcp_service_account"]
                                 client = bigquery.Client(credentials=service_account.Credentials.from_service_account_info(creds_dict), project=creds_dict["project_id"])
                                 
-                                # PKs solicitadas para el Merge
                                 primary_keys_c = ['city_name', 'year_calendar_week', 'year']
                                 upsert_to_bigquery(client, processed_df_C, 'didi_db.Targets_ROM', primary_keys_c)
                                 
                             st.success("¡Targets actualizados con éxito sin duplicados! 🎉")
                     except Exception as e: st.error(f"Error procesando {file.name}: {e}")
-
-# --- 5. PANEL DE MANTENIMIENTO AVANZADO ---
-with st.expander("🛠️ Herramientas de Base de Datos (Mantenimiento Daily DB)"):
-    st.markdown("Usa estos controles en caso de fallos, registros repetidos o ingestas dobles accidentales.")
-    col_clean, col_delete = st.columns(2)
-    
-    with col_clean:
-        st.markdown("#### 🧹 Deduplicación Automática")
-        st.caption("Corre un escaneo de 7 días atrás, borrando filas repetidas pero manteniendo registros únicos.")
-        if st.button("Ejecutar Deduplicación (T-7 a T-1)", use_container_width=True):
-            with st.spinner("Ejecutando Scripts de limpieza en BigQuery..."):
-                try:
-                    creds_dict = st.secrets["gcp_service_account"]
-                    client = bigquery.Client(credentials=service_account.Credentials.from_service_account_info(creds_dict), project=creds_dict["project_id"])
-                    
-                    hoy = datetime.date.today()
-                    for i in range(1, 8):
-                        fecha = (hoy - datetime.timedelta(days=i)).strftime('%Y-%m-%d')
-                        query = f"""
-                        CREATE TEMP TABLE datos_limpios AS SELECT DISTINCT * FROM `didi_db.Daily DB 100268` WHERE date_value = '{fecha}';
-                        DELETE FROM `didi_db.Daily DB 100268` WHERE date_value = '{fecha}';
-                        INSERT INTO `didi_db.Daily DB 100268` SELECT * FROM datos_limpios;
-                        """
-                        client.query(query).result()
-                    st.success("¡Limpieza de los últimos 7 días completada satisfactoriamente!")
-                except Exception as e: st.error(f"Fallo en consulta de limpieza: {e}")
-
-    with col_delete:
-        st.markdown("#### 🗑️ Purga Manual por Fecha")
-        st.caption("Elimina el 100% de la data del día seleccionado si necesitas re-ingestar todo manualmente.")
-        fecha_borrado = st.date_input("Fecha a purgar", value=datetime.date.today() - datetime.timedelta(days=1))
-        
-        if st.button("Purgar Data del Día", type="primary", use_container_width=True):
-            with st.spinner(f"Vaciando partición del {fecha_borrado}..."):
-                try:
-                    creds_dict = st.secrets["gcp_service_account"]
-                    client = bigquery.Client(credentials=service_account.Credentials.from_service_account_info(creds_dict), project=creds_dict["project_id"])
-                    
-                    query = f"DELETE FROM `didi_db.Daily DB 100268` WHERE date_value = '{fecha_borrado.strftime('%Y-%m-%d')}';"
-                    client.query(query).result()
-                    st.success(f"Partición del {fecha_borrado} vaciada con éxito.")
-                except Exception as e: st.error(f"Fallo ejecutando purga: {e}")
