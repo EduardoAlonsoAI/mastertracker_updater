@@ -12,20 +12,25 @@ st.set_page_config(page_title="Data Ops | Master Tracker", page_icon="🚀", lay
 # --- BARRA LATERAL: MANTENIMIENTO AVANZADO ---
 with st.sidebar:
     st.header("🛠️ Mantenimiento de BD")
-    st.markdown("Herramientas de emergencia para eliminar registros repetidos o vaciar particiones de ingestas erróneas.")
+    st.markdown("Herramientas para eliminar registros repetidos o vaciar particiones.")
     
-    # Selector dinámico de tabla (Targets queda excluido por tener Upsert nativo)
     tabla_mantenimiento = st.selectbox(
         "¿Qué tabla deseas modificar?",
-        ["didi_db.Daily DB 100268", "didi_db.Burn SoT"]
+        ["Daily DB", "Burn SoT"]
     )
     
+    # Asignar el nombre real de la tabla según selección
+    if tabla_mantenimiento == "Daily DB":
+        tabla_bq = "didi_db.Daily DB 100268"
+    else:
+        tabla_bq = "didi_db.Burn SoT"
+
     st.divider()
     
     st.markdown("#### 🧹 Deduplicación Automática")
     st.caption("Borra filas repetidas (T-7 a T-1) conservando un registro único por día.")
-    if st.button("Ejecutar Deduplicación", use_container_width=True):
-        with st.spinner(f"Limpiando {tabla_mantenimiento}..."):
+    if st.button(f"Ejecutar Deduplicación en {tabla_mantenimiento}", use_container_width=True):
+        with st.spinner(f"Limpiando {tabla_bq}..."):
             try:
                 creds_dict = st.secrets["gcp_service_account"]
                 client = bigquery.Client(credentials=service_account.Credentials.from_service_account_info(creds_dict), project=creds_dict["project_id"])
@@ -34,12 +39,12 @@ with st.sidebar:
                 for i in range(1, 8):
                     fecha = (hoy - datetime.timedelta(days=i)).strftime('%Y-%m-%d')
                     query = f"""
-                    CREATE TEMP TABLE datos_limpios AS SELECT DISTINCT * FROM `{tabla_mantenimiento}` WHERE date_value = '{fecha}';
-                    DELETE FROM `{tabla_mantenimiento}` WHERE date_value = '{fecha}';
-                    INSERT INTO `{tabla_mantenimiento}` SELECT * FROM datos_limpios;
+                    CREATE TEMP TABLE datos_limpios AS SELECT DISTINCT * FROM `{tabla_bq}` WHERE date_value = '{fecha}';
+                    DELETE FROM `{tabla_bq}` WHERE date_value = '{fecha}';
+                    INSERT INTO `{tabla_bq}` SELECT * FROM datos_limpios;
                     """
                     client.query(query).result()
-                st.success(f"¡Limpieza completada en `{tabla_mantenimiento}`!")
+                st.success(f"¡Limpieza completada exitosamente en `{tabla_bq}`!")
             except Exception as e:
                 st.error(f"Error en limpieza: {e}")
 
@@ -50,14 +55,14 @@ with st.sidebar:
     fecha_borrado = st.date_input("Fecha a purgar", value=datetime.date.today() - datetime.timedelta(days=1))
     
     if st.button("Purgar Data del Día", type="primary", use_container_width=True):
-        with st.spinner(f"Vaciando partición del {fecha_borrado} en {tabla_mantenimiento}..."):
+        with st.spinner(f"Vaciando partición del {fecha_borrado} en {tabla_bq}..."):
             try:
                 creds_dict = st.secrets["gcp_service_account"]
                 client = bigquery.Client(credentials=service_account.Credentials.from_service_account_info(creds_dict), project=creds_dict["project_id"])
                 
-                query = f"DELETE FROM `{tabla_mantenimiento}` WHERE date_value = '{fecha_borrado.strftime('%Y-%m-%d')}';"
+                query = f"DELETE FROM `{tabla_bq}` WHERE date_value = '{fecha_borrado.strftime('%Y-%m-%d')}';"
                 client.query(query).result()
-                st.success(f"Partición {fecha_borrado} eliminada en `{tabla_mantenimiento}`.")
+                st.success(f"Partición {fecha_borrado} eliminada por completo en `{tabla_bq}`.")
             except Exception as e:
                 st.error(f"Fallo ejecutando purga: {e}")
 
@@ -184,8 +189,21 @@ def process_dataframe_C(df, map_period):
     df.columns = df.columns.str.strip().str.replace(' ', '_').str.replace('-', '_')
     if 'year_calendar_week' in df.columns:
         week_series = df['year_calendar_week'].astype(str).str.split('/').str[-1]
-        df['calendar_week_new'] = pd.to_numeric(week_series, errors='coerce').fillna(0).astype(int)
-        df['period'] = df['calendar_week_new'].astype(str).str.zfill(2).map(map_period).fillna("Unknown")
+        
+        # Calcular los nuevos valores ANTES de renombrar las columnas
+        calendar_week_new_vals = pd.to_numeric(week_series, errors='coerce').fillna(0).astype(int)
+        period_new_vals = calendar_week_new_vals.astype(str).str.zfill(2).map(map_period).fillna("Unknown")
+        
+        # Renombrar columnas para que hagan match con BigQuery
+        df = df.rename(columns={
+            'year_calendar_week': 'calendar_week_old',
+            'period': 'period_old'
+        })
+        
+        # Agregar columnas nuevas al final
+        df['calendar_week_new'] = calendar_week_new_vals
+        df['period'] = period_new_vals
+        
     return df
 
 # --- 4. INTERFAZ DE PESTAÑAS (WORKFLOW) ---
@@ -196,8 +214,7 @@ if map_category is not None:
     with tab1:
         with st.container(border=True):
             st.markdown("### 📥 Carga de Daily Metrics")
-            st.caption("Esquema esperado: 202406_SSL_MainMetricsWithManaged_di")
-            uploaded_files_A = st.file_uploader("Sube el reporte diario (CSV/XLSX)", type=['csv', 'xlsx'], accept_multiple_files=True, key="up_A")
+            uploaded_files_A = st.file_uploader("Sube el reporte diario", type=['csv', 'xlsx'], accept_multiple_files=True, key="up_A")
 
             if uploaded_files_A:
                 for file in uploaded_files_A:
@@ -205,10 +222,8 @@ if map_category is not None:
                         df_A = pd.read_excel(file) if file.name.endswith('.xlsx') else pd.read_csv(file)
                         processed_df_A = process_dataframe_A(df_A, map_category, map_cluster, map_period)
                         
-                        st.info(f"✅ Archivo `{file.name}` transformado correctamente.")
-                        
                         if st.button(f"🚀 Ejecutar Append hacia BigQuery", key=f"bq_A_{file.name}", type="primary"):
-                            with st.spinner("Conectando y subiendo registros..."):
+                            with st.spinner("Subiendo registros..."):
                                 creds_dict = st.secrets["gcp_service_account"]
                                 client = bigquery.Client(credentials=service_account.Credentials.from_service_account_info(creds_dict), project=creds_dict["project_id"])
                                 
@@ -222,16 +237,13 @@ if map_category is not None:
     with tab2:
         with st.container(border=True):
             st.markdown("### 📥 Carga de Burn SoT")
-            st.caption("Esquema esperado: 202508_SoT_Burn_di")
-            uploaded_files_B = st.file_uploader("Sube el reporte Burn (CSV/XLSX)", type=['csv', 'xlsx'], accept_multiple_files=True, key="up_B")
+            uploaded_files_B = st.file_uploader("Sube el reporte Burn", type=['csv', 'xlsx'], accept_multiple_files=True, key="up_B")
 
             if uploaded_files_B:
                 for file in uploaded_files_B:
                     try:
                         df_B = pd.read_excel(file) if file.name.endswith('.xlsx') else pd.read_csv(file)
                         processed_df_B = process_dataframe_B(df_B, map_cluster, map_period)
-                        
-                        st.info(f"✅ Archivo `{file.name}` transformado correctamente.")
 
                         if st.button(f"🚀 Ejecutar Append hacia BigQuery", key=f"bq_B_{file.name}", type="primary"):
                             with st.spinner("Parseando esquema y subiendo a BigQuery..."):
@@ -243,16 +255,13 @@ if map_category is not None:
                                 ]
 
                                 processed_df_B.columns = [field.name for field in bq_schema]
-
                                 for field in bq_schema:
                                     col = field.name
-                                    if field.field_type == 'INTEGER':
-                                        processed_df_B[col] = pd.to_numeric(processed_df_B[col], errors='coerce').round(0).astype('Int64')
+                                    if field.field_type == 'INTEGER': processed_df_B[col] = pd.to_numeric(processed_df_B[col], errors='coerce').round(0).astype('Int64')
                                     elif field.field_type == 'FLOAT':
                                         if processed_df_B[col].dtype == 'object': processed_df_B[col] = processed_df_B[col].astype(str).str.replace(',', '', regex=False)
                                         processed_df_B[col] = pd.to_numeric(processed_df_B[col], errors='coerce').astype('float64')
-                                    elif field.field_type == 'STRING':
-                                        processed_df_B[col] = processed_df_B[col].astype(str).replace({'nan': '', 'NaN': '', 'None': ''})
+                                    elif field.field_type == 'STRING': processed_df_B[col] = processed_df_B[col].astype(str).replace({'nan': '', 'NaN': '', 'None': ''})
 
                                 job = client.load_table_from_dataframe(processed_df_B, 'didi_db.Burn SoT', job_config=bigquery.LoadJobConfig(schema=bq_schema, write_disposition=bigquery.WriteDisposition.WRITE_APPEND))
                                 job.result() 
@@ -263,7 +272,6 @@ if map_category is not None:
     with tab3:
         with st.container(border=True):
             st.markdown("### 🎯 Carga de Targets ROM")
-            st.caption("La ingesta limpiará encabezados e insertará o actualizará metas evitando duplicidades.")
             uploaded_files_C = st.file_uploader("Sube el archivo ROM Planning (CSV)", type=['csv'], accept_multiple_files=True, key="up_C")
 
             if uploaded_files_C:
@@ -272,14 +280,15 @@ if map_category is not None:
                         df_C = pd.read_csv(file, header=2)
                         processed_df_C = process_dataframe_C(df_C, map_period)
                         
-                        st.info(f"✅ Archivo `{file.name}` transformado (Métricas nuevas calculadas).")
+                        st.info(f"✅ Archivo transformado con nombres mapeados para BQ.")
 
                         if st.button(f"🚀 Ejecutar Inteligente (Upsert) hacia BigQuery", key=f"bq_C_{file.name}", type="primary"):
-                            with st.spinner("Sincronizando Targets y actualizando metas obsoletas..."):
+                            with st.spinner("Sincronizando Targets..."):
                                 creds_dict = st.secrets["gcp_service_account"]
                                 client = bigquery.Client(credentials=service_account.Credentials.from_service_account_info(creds_dict), project=creds_dict["project_id"])
                                 
-                                primary_keys_c = ['city_name', 'year_calendar_week', 'year']
+                                # PKs actualizadas usando el nombre de BQ
+                                primary_keys_c = ['city_name', 'calendar_week_old', 'year']
                                 upsert_to_bigquery(client, processed_df_C, 'didi_db.Targets SoT', primary_keys_c)
                                 
                             st.success("¡Targets actualizados con éxito sin duplicados! 🎉")
