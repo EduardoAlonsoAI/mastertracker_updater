@@ -199,38 +199,38 @@ def process_dataframe_C(df, map_period):
     # 1. Limpieza base de columnas
     df.columns = df.columns.str.strip().str.replace(' ', '_').str.replace('-', '_')
     
-    # 2. DICCIONARIO DE TRADUCCIÓN: Convertimos los nombres del CSV a lo que espera BQ
+    # 2. Diccionario de Traducción a BQ
     rename_dict = {
         'year_calendar_week': 'calendar_week_old',
-        'period': 'Period_old',            # BQ espera P mayúscula
-        'Others_ENG_Burn': 'Others ENG Burn', # BQ lo tiene con espacios
-        'Pax_eng_eng': 'PAX_eng_perc',      # Corregimos el typo del Excel
-        'DRV_eng_eng': 'DRV_eng_perc'       # Corregimos el typo del Excel
+        'period': 'Period_old',            
+        'Others_ENG_Burn': 'Others ENG Burn', 
+        'Pax_eng_eng': 'PAX_eng_perc',      
+        'DRV_eng_eng': 'DRV_eng_perc'       
     }
     df = df.rename(columns=rename_dict)
     
-    # 3. Blindaje: Forzar todo a número (excepto las descriptivas)
+    # 3. Blindaje total de columnas de texto (las únicas que NO se convertirán a número)
     columnas_texto = [
         'index', 'geo_granularity', 'time_granularity', 'Period_old', 
         'calendar_week_old', 'subregion', 'country_code', 'city_type', 
-        'city_abbreviation', 'city_name'
+        'city_abbreviation', 'city_name', 'year'
     ]
     
+    # 4. Barredora agresiva para todas las demás columnas
     for col in df.columns:
-        if col not in columnas_texto and df[col].dtype == 'object':
-            # Quitamos espacios, comas, signos de $ y %
+        if col not in columnas_texto:
+            # Ya no preguntamos si es "object". Forzamos a que sea texto temporalmente, 
+            # le arrancamos las comas, espacios, dólares y porcentajes, y lo clavamos como número.
             df[col] = df[col].astype(str).str.strip().str.replace(r'[,\$%]', '', regex=True)
-            # Forzamos a FLOAT64
             df[col] = pd.to_numeric(df[col], errors='coerce')
 
-    # 4. Calcular nuevas columnas de calendario
+    # 5. Lógica de Calendario
     if 'calendar_week_old' in df.columns:
         week_series = df['calendar_week_old'].astype(str).str.split('/').str[-1]
         
         calendar_week_new_vals = pd.to_numeric(week_series, errors='coerce').fillna(0).astype(int)
         period_new_vals = calendar_week_new_vals.astype(str).str.zfill(2).map(map_period).fillna("Unknown")
         
-        # Insertamos al final (con los nombres exactos para BQ)
         df['calendar_week_new'] = calendar_week_new_vals
         df['period'] = period_new_vals
         
