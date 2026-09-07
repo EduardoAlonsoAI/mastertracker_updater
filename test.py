@@ -107,8 +107,7 @@ def upsert_to_bigquery(client, df, target_table_id, primary_keys, schema=None):
     job_config = bigquery.LoadJobConfig(write_disposition="WRITE_TRUNCATE")
     if schema:
         job_config.schema = schema
-    else:
-        job_config.autodetect = True
+    # Nota: Eliminamos el autodetect=True para forzar que respete los tipos de Pandas
         
     job = client.load_table_from_dataframe(df, temp_table_id, job_config=job_config)
     job.result() 
@@ -188,36 +187,34 @@ def process_dataframe_B(df, map_cluster, map_period):
 def process_dataframe_C(df, map_period):
     df.columns = df.columns.str.strip().str.replace(' ', '_').str.replace('-', '_')
     
-    # 1. Limpiar caracteres financieros (comas, $, %) y forzar a numérico
-    # Protegemos las columnas que SÍ deben ser texto:
+    # 1. Blindaje: Forzar todo a número (excepto las columnas descriptivas)
     columnas_texto = [
         'index', 'geo_granularity', 'time_granularity', 'period', 
         'year_calendar_week', 'subregion', 'country_code', 'city_type', 
-        'city_abbreviation', 'city_name'
+        'city_abbreviation', 'city_name', 'calendar_week_old', 'period_old'
     ]
     
     for col in df.columns:
         if col not in columnas_texto and df[col].dtype == 'object':
-            # Quitamos comas, signos de pesos y porcentajes
-            df[col] = df[col].astype(str).str.replace(r'[,\$%]', '', regex=True)
-            # Convertimos a número (los vacíos se vuelven NaN, compatibles con BQ)
+            # Quitamos espacios, comas, signos de $ y %
+            df[col] = df[col].astype(str).str.strip().str.replace(r'[,\$%]', '', regex=True)
+            # Forzamos a que sea un FLOAT64 (si hay errores se vuelven nulos sin romper el código)
             df[col] = pd.to_numeric(df[col], errors='coerce')
 
-    # 2. Calcular nuevas columnas y renombrar para BQ
+    # 2. Calcular nuevas columnas de calendario
     if 'year_calendar_week' in df.columns:
         week_series = df['year_calendar_week'].astype(str).str.split('/').str[-1]
         
-        # Calcular los nuevos valores ANTES de renombrar las columnas
         calendar_week_new_vals = pd.to_numeric(week_series, errors='coerce').fillna(0).astype(int)
         period_new_vals = calendar_week_new_vals.astype(str).str.zfill(2).map(map_period).fillna("Unknown")
         
-        # Renombrar columnas para que hagan match con BigQuery
+        # Renombramos para que haga match con BQ
         df = df.rename(columns={
             'year_calendar_week': 'calendar_week_old',
             'period': 'period_old'
         })
         
-        # Agregar columnas nuevas al final
+        # Insertamos al final
         df['calendar_week_new'] = calendar_week_new_vals
         df['period'] = period_new_vals
         
