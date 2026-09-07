@@ -280,7 +280,7 @@ if map_category is not None:
                                 client = bigquery.Client(credentials=service_account.Credentials.from_service_account_info(creds_dict), project=creds_dict["project_id"])
                                 
                                 primary_keys_c = ['city_name', 'year_calendar_week', 'year']
-                                upsert_to_bigquery(client, processed_df_C, 'didi_db.Targets_ROM', primary_keys_c)
+                                upsert_to_bigquery(client, processed_df_C, 'didi_db.Targets SoT', primary_keys_c)
                                 
                             st.success("¡Targets actualizados con éxito sin duplicados! 🎉")
                     except Exception as e: st.error(f"Error procesando {file.name}: {e}")
