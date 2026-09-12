@@ -140,13 +140,19 @@ def upsert_to_bigquery(client, df, target_table_id, primary_keys, schema=None):
 
 # --- 3. LÓGICAS DE TRANSFORMACIÓN ---
 def process_dataframe_A(df, map_category, map_cluster, map_period):
-    df = df.iloc[:, :31].copy()
+    # 1. Guardamos el DataFrame completo antes de recortarlo
+    df_full = df.copy()
+    
+    # 2. Mantenemos tu base original intacta (esto garantiza que el esquema viejo no se rompa)
+    df = df_full.iloc[:, :31].copy()
     df.iloc[:, 29] = 0
     df.iloc[:, 30] = 0
     df.iloc[:, 2] = pd.to_datetime(df.iloc[:, 2], errors='coerce').dt.strftime('%Y-%m-%d')
     
     for col_idx in [26, 27, 28]:
-        df.iloc[:, col_idx] = df.iloc[:, col_idx].replace({',': ''}, regex=True)
+        # Asegurarnos de limpiar comas
+        if df.iloc[:, col_idx].dtype == 'object':
+            df.iloc[:, col_idx] = df.iloc[:, col_idx].astype(str).str.replace(',', '', regex=False)
         df.iloc[:, col_idx] = pd.to_numeric(df.iloc[:, col_idx], errors='coerce')
     
     city_col = df.iloc[:, 6].astype(str).str.strip()
@@ -156,6 +162,41 @@ def process_dataframe_A(df, map_category, map_cluster, map_period):
     df.insert(1, 'Cluster', city_col.map(map_cluster).fillna("Other"))
     df.insert(2, 'City Name Map', city_col)
     df.insert(3, 'Period', week_col.map(map_period).fillna("Unknown"))
+
+    # =====================================================================
+    # 3. LA MAGIA DE LAS 10 NUEVAS MÉTRICAS AL FINAL
+    # =====================================================================
+    # Diccionario con el nombre de la columna y su índice exacto (0-based)
+    # AE=30, AF=31, AG=32, AH=33, AK=36, AL=37, AM=38, AN=39, AO=40, AP=41
+    nuevas_metricas = {
+        'PFT': 30, 'DFT': 31, 'PCB': 32, 'DCB': 33,
+        'CAT': 36, 'ETA': 37,
+        'PCBA': 38, 'PCAA': 39, 'DCAA': 40, 'SCAA': 41
+    }
+    
+    for col_name, idx in nuevas_metricas.items():
+        # Verificamos si el archivo subido tiene suficientes columnas (para que no explote con históricos viejos)
+        if idx < len(df_full.columns):
+            raw_val = df_full.iloc[:, idx]
+            
+            # Limpieza aplanadora de comas
+            if raw_val.dtype == 'object':
+                raw_val = raw_val.astype(str).str.replace(',', '', regex=False)
+                
+            num_val = pd.to_numeric(raw_val, errors='coerce')
+            
+            # Casteo estricto dependiendo del tipo de dato en BQ
+            if col_name in ['CAT', 'ETA']:
+                df[col_name] = num_val.astype('float64')
+            else:
+                df[col_name] = num_val.round(0).astype('Int64')
+        else:
+            # Si el archivo es viejo y no trae estas columnas, las declaramos nulas
+            if col_name in ['CAT', 'ETA']:
+                df[col_name] = pd.Series(dtype='float64')
+            else:
+                df[col_name] = pd.Series(dtype='Int64')
+                
     return df
 
 def process_dataframe_B(df, map_cluster, map_period):
@@ -250,15 +291,19 @@ if map_category is not None:
                         df_A = pd.read_excel(file) if file.name.endswith('.xlsx') else pd.read_csv(file)
                         processed_df_A = process_dataframe_A(df_A, map_category, map_cluster, map_period)
                         
-                        if st.button(f"🚀 Ejecutar Append hacia BigQuery", key=f"bq_A_{file.name}", type="primary"):
-                            with st.spinner("Subiendo registros..."):
+                      if st.button(f"🚀 Ejecutar Inteligente (Upsert) hacia BigQuery", key=f"bq_A_{file.name}", type="primary"):
+                            with st.spinner("Sincronizando registros históricos sin duplicar..."):
                                 creds_dict = st.secrets["gcp_service_account"]
                                 client = bigquery.Client(credentials=service_account.Credentials.from_service_account_info(creds_dict), project=creds_dict["project_id"])
                                 
-                                archivo_virtual = io.BytesIO(processed_df_A.to_csv(index=False, header=False).encode('utf-8'))
-                                job = client.load_table_from_file(archivo_virtual, 'didi_db.Daily DB 100268', job_config=bigquery.LoadJobConfig(source_format=bigquery.SourceFormat.CSV, skip_leading_rows=0, write_disposition=bigquery.WriteDisposition.WRITE_APPEND))
-                                job.result() 
-                            st.success("¡Operación completada en BigQuery! 🎉")
+                                # 1. Definimos las "Llaves Primarias" para buscar matches
+                                # ¡IMPORTANTE!: Revisa que estos nombres sean exactamente los de tu CSV/DataFrame
+                                primary_keys_a = ['date_value', 'city_id', 'product_id'] 
+                                
+                                # 2. Usamos tu función de Upsert en lugar del Append a ciegas
+                                upsert_to_bigquery(client, processed_df_A, 'didi_db.Daily DB 100268', primary_keys_a)
+                                
+                            st.success("¡Base actualizada con éxito! Ceros duplicados. 🎉")
                     except Exception as e: st.error(f"Error procesando {file.name}: {e}")
 
     # --- PESTAÑA 2 (Burn SoT) ---
