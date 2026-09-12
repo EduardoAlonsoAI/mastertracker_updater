@@ -296,19 +296,33 @@ if map_category is not None:
                                 creds_dict = st.secrets["gcp_service_account"]
                                 client = bigquery.Client(credentials=service_account.Credentials.from_service_account_info(creds_dict), project=creds_dict["project_id"])
                                     
-                                # 1. EL PARCHE MÁGICO: Robamos el esquema de BQ y renombramos las columnas del DataFrame
+                                # 1. Obtenemos la tabla y el esquema oficial
                                 target_table = client.get_table('didi_db.Daily DB 100268')
-                                bq_col_names = [field.name for field in target_table.schema]
-                                processed_df_A.columns = bq_col_names
+                                bq_schema = target_table.schema
                                 
-                                # 2. Definimos las "Llaves Primarias" usando los nombres oficiales de BQ
-                                # Confirma que 'city_id' y 'product_id' sean las llaves correctas en tu tabla
+                                # 2. Renombramos columnas para que hagan match perfecto
+                                processed_df_A.columns = [field.name for field in bq_schema]
+                                
+                                # 3. LA BARREDORA FINAL: Casteo estricto basado en el esquema de BQ
+                                for field in bq_schema:
+                                    col = field.name
+                                    if field.field_type == 'INTEGER':
+                                        processed_df_A[col] = pd.to_numeric(processed_df_A[col], errors='coerce').round(0).astype('Int64')
+                                    elif field.field_type == 'FLOAT':
+                                        if processed_df_A[col].dtype == 'object':
+                                            processed_df_A[col] = processed_df_A[col].astype(str).str.replace(',', '', regex=False)
+                                        # Esto convierte la notación científica 'e-06' a decimales reales
+                                        processed_df_A[col] = pd.to_numeric(processed_df_A[col], errors='coerce').astype('float64')
+                                    elif field.field_type == 'STRING':
+                                        processed_df_A[col] = processed_df_A[col].astype(str).replace({'nan': '', 'NaN': '', 'None': '', '\\N': ''})
+                                
+                                # 4. Definimos las "Llaves Primarias" usando los nombres oficiales de BQ
                                 primary_keys_a = ['date_value', 'city_id', 'product_id'] 
                                     
-                                # 3. Upsert
+                                # 5. Upsert
                                 upsert_to_bigquery(client, processed_df_A, 'didi_db.Daily DB 100268', primary_keys_a)
                                     
-                            st.success("¡Base actualizada con éxito! Ceros duplicados. 🎉")
+                            st.success("¡Base actualizada con éxito! Ceros duplicados y notaciones corregidas. 🎉")
                     except Exception as e: st.error(f"Error procesando {file.name}: {e}")
 
     # --- PESTAÑA 2 (Burn SoT) ---
