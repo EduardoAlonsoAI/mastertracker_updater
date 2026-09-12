@@ -143,6 +143,9 @@ def process_dataframe_A(df, map_category, map_cluster, map_period):
     # 1. Guardamos el DataFrame completo antes de recortarlo
     df_full = df.copy()
     
+    # EL EXTERMINADOR: Buscamos el texto exacto '\N' en todo el excel y lo volvemos un nulo real
+    df_full = df_full.replace('\\N', None, regex=False)
+    
     # 2. Mantenemos tu base original intacta (esto garantiza que el esquema viejo no se rompa)
     df = df_full.iloc[:, :31].copy()
     df.iloc[:, 29] = 0
@@ -166,8 +169,6 @@ def process_dataframe_A(df, map_category, map_cluster, map_period):
     # =====================================================================
     # 3. LA MAGIA DE LAS 10 NUEVAS MÉTRICAS AL FINAL
     # =====================================================================
-    # Diccionario con el nombre de la columna y su índice exacto (0-based)
-    # AE=30, AF=31, AG=32, AH=33, AK=36, AL=37, AM=38, AN=39, AO=40, AP=41
     nuevas_metricas = {
         'PFT': 30, 'DFT': 31, 'PCB': 32, 'DCB': 33,
         'CAT': 36, 'ETA': 37,
@@ -175,7 +176,7 @@ def process_dataframe_A(df, map_category, map_cluster, map_period):
     }
     
     for col_name, idx in nuevas_metricas.items():
-        # Verificamos si el archivo subido tiene suficientes columnas (para que no explote con históricos viejos)
+        # Verificamos si el archivo subido tiene suficientes columnas (históricos)
         if idx < len(df_full.columns):
             raw_val = df_full.iloc[:, idx]
             
@@ -191,7 +192,7 @@ def process_dataframe_A(df, map_category, map_cluster, map_period):
             else:
                 df[col_name] = num_val.round(0).astype('Int64')
         else:
-            # Si el archivo es viejo y no trae estas columnas, las declaramos nulas
+            # Si el archivo es viejo, declaramos las columnas nulas
             if col_name in ['CAT', 'ETA']:
                 df[col_name] = pd.Series(dtype='float64')
             else:
