@@ -290,17 +290,21 @@ if map_category is not None:
                     try:
                         df_A = pd.read_excel(file) if file.name.endswith('.xlsx') else pd.read_csv(file)
                         processed_df_A = process_dataframe_A(df_A, map_category, map_cluster, map_period)
-                        
                         if st.button(f"🚀 Ejecutar Inteligente (Upsert) hacia BigQuery", key=f"bq_A_{file.name}", type="primary"):
                             with st.spinner("Sincronizando registros históricos sin duplicar..."):
                                 creds_dict = st.secrets["gcp_service_account"]
                                 client = bigquery.Client(credentials=service_account.Credentials.from_service_account_info(creds_dict), project=creds_dict["project_id"])
                                     
-                                # 1. Definimos las "Llaves Primarias" para buscar matches
-                                # ¡IMPORTANTE!: Revisa que estos nombres sean exactamente los de tu CSV/DataFrame
+                                # 1. EL PARCHE MÁGICO: Robamos el esquema de BQ y renombramos las columnas del DataFrame
+                                target_table = client.get_table('didi_db.Daily DB 100268')
+                                bq_col_names = [field.name for field in target_table.schema]
+                                processed_df_A.columns = bq_col_names
+                                
+                                # 2. Definimos las "Llaves Primarias" usando los nombres oficiales de BQ
+                                # Confirma que 'city_id' y 'product_id' sean las llaves correctas en tu tabla
                                 primary_keys_a = ['date_value', 'city_id', 'product_id'] 
                                     
-                                # 2. Usamos tu función de Upsert en lugar del Append a ciegas
+                                # 3. Upsert
                                 upsert_to_bigquery(client, processed_df_A, 'didi_db.Daily DB 100268', primary_keys_a)
                                     
                             st.success("¡Base actualizada con éxito! Ceros duplicados. 🎉")
