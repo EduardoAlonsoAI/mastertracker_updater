@@ -239,6 +239,13 @@ def process_dataframe_C(df, map_period):
     # 1. Limpieza base de columnas
     df.columns = df.columns.str.strip().str.replace(' ', '_').str.replace('-', '_')
     
+    # EL TRUCO: Forzamos el nombre de las dos últimas columnas del CSV 
+    # para que hagan match perfecto con BigQuery sin importar cómo vengan en Excel
+    cols = list(df.columns)
+    cols[-2] = 'cat_sec'
+    cols[-1] = 'eta_min'
+    df.columns = cols
+    
     # 2. Diccionario de Traducción a BQ
     rename_dict = {
         'year_calendar_week': 'calendar_week_old',
@@ -259,10 +266,14 @@ def process_dataframe_C(df, map_period):
     # 4. Barredora agresiva para todas las demás columnas
     for col in df.columns:
         if col not in columnas_texto:
-            # Ya no preguntamos si es "object". Forzamos a que sea texto temporalmente, 
-            # le arrancamos las comas, espacios, dólares y porcentajes, y lo clavamos como número.
+            # Forzamos a texto, arrancamos basura y convertimos
             df[col] = df[col].astype(str).str.strip().str.replace(r'[,\$%]', '', regex=True)
-            df[col] = pd.to_numeric(df[col], errors='coerce')
+            
+            # Blindaje estricto para las nuevas INT64
+            if col in ['cat_sec', 'eta_min']:
+                df[col] = pd.to_numeric(df[col], errors='coerce').round(2).astype('Float64')
+            else:
+                df[col] = pd.to_numeric(df[col], errors='coerce')
 
     # 5. Lógica de Calendario
     if 'calendar_week_old' in df.columns:
