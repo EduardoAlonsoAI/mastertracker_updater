@@ -9,10 +9,29 @@ import io
 # --- CONFIGURACIÓN DE PÁGINA Y UI ---
 st.set_page_config(page_title="Data Ops | Master Tracker", page_icon="🚀", layout="wide")
 
+# --- DESTINOS: a qué tablas de BigQuery se sube ---
+# MX  = las tablas de siempre. POC = ciudades de los demás equipos (tablas vacías creadas con sql/05_create_poc_tables.sql).
+# Si cambias el nombre de una tabla POC aquí, cámbialo también en Nova ([nova] real_table_poc / burn_table_poc en secrets).
+#   usa_abc = True  -> Category y Cluster salen de ABC_dictionary.csv (ciudad -> category / cluster) y Burn solo carga MX (+ Juárez y Mazatlán)
+#   usa_abc = False -> Category y Cluster se llenan con "N/A", no hace falta ABC_dictionary.csv y Burn carga todas las filas del archivo
+#   targets = None  -> ese destino no tiene tabla de Targets (la pestaña queda deshabilitada). Si algún día existe, pon aquí su nombre.
+DESTINOS = {
+    "MX":  {"label": "MX",                 "daily": "didi_db.Daily DB 100268", "burn": "didi_db.Burn SoT",     "targets": "didi_db.Targets SoT", "usa_abc": True},
+    "POC": {"label": "POC / otros equipos", "daily": "didi_db.Daily DB POC",    "burn": "didi_db.Burn SoT POC", "targets": None,                  "usa_abc": False},
+}
+DESTINO_POR_DEFECTO = "MX"
+
 # --- BARRA LATERAL: MANTENIMIENTO AVANZADO ---
 with st.sidebar:
+    st.header("🎯 Destino de la carga")
+    destino = st.radio("¿A qué base subes?", list(DESTINOS), index=list(DESTINOS).index(DESTINO_POR_DEFECTO),
+                       format_func=lambda k: DESTINOS[k]["label"], key="destino")
+    DESTINO_CFG = DESTINOS[destino]
+    st.caption(f"Daily: `{DESTINO_CFG['daily']}`  \nBurn: `{DESTINO_CFG['burn']}`  \nTargets: " + (f"`{DESTINO_CFG['targets']}`" if DESTINO_CFG["targets"] else "no aplica"))
+    st.divider()
+
     st.header("🛠️ Mantenimiento de BD")
-    st.markdown("Herramientas para eliminar registros repetidos o vaciar particiones.")
+    st.markdown(f"Herramientas para eliminar registros repetidos o vaciar particiones en **{DESTINO_CFG['label']}**.")
     
     tabla_mantenimiento = st.selectbox(
         "¿Qué tabla deseas modificar?",
@@ -21,15 +40,16 @@ with st.sidebar:
     
     # Asignar el nombre real de la tabla según selección
     if tabla_mantenimiento == "Daily DB":
-        tabla_bq = "didi_db.Daily DB 100268"
+        tabla_bq = DESTINO_CFG["daily"]
     else:
-        tabla_bq = "didi_db.Burn SoT"
+        tabla_bq = DESTINO_CFG["burn"]
+    st.caption(f"Tabla seleccionada: `{tabla_bq}`")
 
     st.divider()
     
     st.markdown("#### 🧹 Deduplicación Automática")
     st.caption("Borra filas repetidas (T-7 a T-1) conservando un registro único por día.")
-    if st.button(f"Ejecutar Deduplicación en {tabla_mantenimiento}", use_container_width=True):
+    if st.button(f"Ejecutar Deduplicación en {tabla_mantenimiento} ({destino})", use_container_width=True):
         with st.spinner(f"Limpiando {tabla_bq}..."):
             try:
                 creds_dict = st.secrets["gcp_service_account"]
@@ -54,7 +74,7 @@ with st.sidebar:
     st.caption("Elimina el 100% de la data de la fecha especificada.")
     fecha_borrado = st.date_input("Fecha a purgar", value=datetime.date.today() - datetime.timedelta(days=1))
     
-    if st.button("Purgar Data del Día", type="primary", use_container_width=True):
+    if st.button(f"Purgar Data del Día ({destino})", type="primary", use_container_width=True):
         with st.spinner(f"Vaciando partición del {fecha_borrado} en {tabla_bq}..."):
             try:
                 creds_dict = st.secrets["gcp_service_account"]
@@ -74,30 +94,45 @@ with col_head1:
 with col_head2:
     st.link_button("📊 Ver en G-Sheets (Bridge)", "https://docs.google.com/spreadsheets/d/18q9hGVHkCwLyIrhavMoYGkxAU9ZMxuUTOS7RramILFc/edit?usp=sharing", use_container_width=True)
 
+st.info(f"📍 Destino activo: **{DESTINO_CFG['label']}** → `{DESTINO_CFG['daily']}` · `{DESTINO_CFG['burn']}` · "
+        + (f"`{DESTINO_CFG['targets']}`" if DESTINO_CFG["targets"] else "sin tabla de Targets"))
+
 st.divider()
 
 # --- 1. CARGA DE DICCIONARIOS ---
 @st.cache_data
 def load_dicts():
+    """Devuelve (map_category, map_cluster, map_period, errores).
+    D_dictionary.csv (semana -> periodo) es obligatorio para todos los destinos.
+    ABC_dictionary.csv (ciudad -> category / cluster) solo lo usa MX: si falta o no se puede leer, map_category y map_cluster quedan en None
+    y POC sigue funcionando (Category y Cluster = "N/A")."""
+    errores = []
+    map_category = map_cluster = map_period = None
     try:
-        abc_dict = pd.read_csv("ABC_dictionary.csv")
         d_dict = pd.read_csv("D_dictionary.csv")
-        
-        abc_dict.columns = abc_dict.columns.str.strip()
         d_dict.columns = d_dict.columns.str.strip()
-        
-        map_category = dict(zip(abc_dict['City name'], abc_dict['Category']))
-        map_cluster = dict(zip(abc_dict['City name'], abc_dict['Cluster']))
-        
         d_dict['Week'] = d_dict['Week'].astype(str).str.zfill(2)
         map_period = dict(zip(d_dict['Week'], d_dict['Period']))
-        
-        return map_category, map_cluster, map_period
     except Exception as e:
-        st.error(f"⚠️ Error cargando diccionarios locales: {e}")
-        return None, None, None
+        errores.append(f"⚠️ No se pudo cargar D_dictionary.csv (semana → periodo): {e}")
+    try:
+        abc_dict = pd.read_csv("ABC_dictionary.csv")
+        abc_dict.columns = abc_dict.columns.str.strip()
+        map_category = dict(zip(abc_dict['City name'], abc_dict['Category']))
+        map_cluster = dict(zip(abc_dict['City name'], abc_dict['Cluster']))
+    except Exception as e:
+        map_category = map_cluster = None
+        errores.append(f"⚠️ No se pudo cargar ABC_dictionary.csv (ciudad → category / cluster): {e}")
+    return map_category, map_cluster, map_period, errores
 
-map_category, map_cluster, map_period = load_dicts()
+map_category, map_cluster, map_period, errores_dicts = load_dicts()
+if map_period is None:
+    for e_ in errores_dicts:
+        st.error(e_)
+elif DESTINO_CFG["usa_abc"] and map_category is None:
+    st.error("⚠️ MX necesita ABC_dictionary.csv para llenar Category y Cluster. " + " ".join(errores_dicts))
+elif not DESTINO_CFG["usa_abc"]:
+    st.caption("ℹ️ En este destino no se usa ABC_dictionary.csv: Category y Cluster se llenan con \"N/A\".")
 
 # --- 2. MOTOR DE UPSERT (MERGE) PARA BIGQUERY ---
 def upsert_to_bigquery(client, df, target_table_id, primary_keys, schema=None):
@@ -139,7 +174,8 @@ def upsert_to_bigquery(client, df, target_table_id, primary_keys, schema=None):
     client.query(f"DROP TABLE `{temp_table_id}`").result()
 
 # --- 3. LÓGICAS DE TRANSFORMACIÓN ---
-def process_dataframe_A(df, map_category, map_cluster, map_period):
+def process_dataframe_A(df, map_category, map_cluster, map_period, modo="MX"):
+    # modo="MX": Category / Cluster desde ABC_dictionary.csv.  modo="POC": Category y Cluster = "N/A" (los mapas pueden ser None).
     # 1. Guardamos el DataFrame completo antes de recortarlo
     df_full = df.copy()
     
@@ -161,8 +197,12 @@ def process_dataframe_A(df, map_category, map_cluster, map_period):
     city_col = df.iloc[:, 6].astype(str).str.strip()
     week_col = df.iloc[:, 1].astype(str).str.zfill(2)
     
-    df.insert(0, 'Category', city_col.map(map_category).fillna("Other"))
-    df.insert(1, 'Cluster', city_col.map(map_cluster).fillna("Other"))
+    if modo == "MX":
+        df.insert(0, 'Category', city_col.map(map_category).fillna("Other"))
+        df.insert(1, 'Cluster', city_col.map(map_cluster).fillna("Other"))
+    else:
+        df.insert(0, 'Category', "N/A")
+        df.insert(1, 'Cluster', "N/A")
     df.insert(2, 'City Name Map', city_col)
     df.insert(3, 'Period', week_col.map(map_period).fillna("Unknown"))
 
@@ -200,12 +240,16 @@ def process_dataframe_A(df, map_category, map_cluster, map_period):
                 
     return df
 
-def process_dataframe_B(df, map_cluster, map_period):
-    subregion_col = df.iloc[:, 0].astype(str).str.strip().str.upper()
-    city_name_col = df.iloc[:, 3].astype(str).str.strip()
-    
-    mask = (subregion_col == 'MX') | (city_name_col.str.contains('Juarez|Juárez|Mazatlan|Mazatlán', case=False, regex=True, na=False))
-    df = df[mask].copy().iloc[:, :42]
+def process_dataframe_B(df, map_cluster, map_period, modo="MX"):
+    # modo="MX": solo filas de MX (subregion MX + Juárez y Mazatlán) y Cluster desde el diccionario.
+    # modo="POC": se cargan TODAS las filas del archivo y Cluster = "N/A" (map_cluster puede ser None).
+    if modo == "MX":
+        subregion_col = df.iloc[:, 0].astype(str).str.strip().str.upper()
+        city_name_col = df.iloc[:, 3].astype(str).str.strip()
+        mask = (subregion_col == 'MX') | (city_name_col.str.contains('Juarez|Juárez|Mazatlan|Mazatlán', case=False, regex=True, na=False))
+        df = df[mask].copy().iloc[:, :42]
+    else:
+        df = df.copy().iloc[:, :42]
     df.iloc[:, 32] = 0
     
     city_col = df.iloc[:, 3].astype(str).str.strip() 
@@ -228,7 +272,7 @@ def process_dataframe_B(df, map_cluster, map_period):
     parsed_yw = df.iloc[:, 4].apply(parse_year_week)
     year, week = parsed_yw.apply(lambda x: x[0]), parsed_yw.apply(lambda x: x[1])
     
-    df['Cluster_AQ'] = city_col.map(map_cluster).fillna("Other")
+    df['Cluster_AQ'] = city_col.map(map_cluster).fillna("Other") if modo == "MX" else "N/A"
     df['Weeknum_AR'], df['Weeknum_AS'] = week, week
     df['Year_AT'] = year
     df['Period_AU'] = week.astype(str).str.zfill(2).map(map_period).fillna("Unknown")
@@ -288,30 +332,33 @@ def process_dataframe_C(df, map_period):
     return df
 
 # --- 4. INTERFAZ DE PESTAÑAS (WORKFLOW) ---
-if map_category is not None:
+if map_period is not None and (map_category is not None or not DESTINO_CFG["usa_abc"]):
     tab1, tab2, tab3 = st.tabs(["📊 Daily Metrics", "📈 Burn SoT", "🎯 Targets ROM"])
 
     # --- PESTAÑA 1 (Daily Metrics) ---
     with tab1:
         with st.container(border=True):
-            st.markdown("### 📥 Carga de Daily Metrics")
-            uploaded_files_A = st.file_uploader("Sube el reporte diario", type=['csv', 'xlsx'], accept_multiple_files=True, key="up_A")
+            st.markdown(f"### 📥 Carga de Daily Metrics → `{DESTINO_CFG['daily']}`")
+            uploaded_files_A = st.file_uploader("Sube el reporte diario", type=['csv', 'xlsx'], accept_multiple_files=True, key=f"up_A_{destino}")
 
             if uploaded_files_A:
                 for file in uploaded_files_A:
                     try:
                         df_A = pd.read_excel(file) if file.name.endswith('.xlsx') else pd.read_csv(file)
-                        processed_df_A = process_dataframe_A(df_A, map_category, map_cluster, map_period)
-                        if st.button(f"🚀 Ejecutar Inteligente (Upsert) hacia BigQuery", key=f"bq_A_{file.name}", type="primary"):
+                        processed_df_A = process_dataframe_A(df_A, map_category, map_cluster, map_period, modo=destino)
+                        if st.button(f"🚀 Ejecutar Inteligente (Upsert) hacia BigQuery → {DESTINO_CFG['daily']}", key=f"bq_A_{destino}_{file.name}", type="primary"):
                             with st.spinner("Sincronizando registros históricos sin duplicar..."):
                                 creds_dict = st.secrets["gcp_service_account"]
                                 client = bigquery.Client(credentials=service_account.Credentials.from_service_account_info(creds_dict), project=creds_dict["project_id"])
                                     
                                 # 1. Obtenemos la tabla y el esquema oficial
-                                target_table = client.get_table('didi_db.Daily DB 100268')
+                                target_table = client.get_table(DESTINO_CFG["daily"])
                                 bq_schema = target_table.schema
                                 
                                 # 2. Renombramos columnas para que hagan match perfecto
+                                if len(processed_df_A.columns) != len(bq_schema):
+                                    raise ValueError(f"El archivo procesado tiene {len(processed_df_A.columns)} columnas y `{DESTINO_CFG['daily']}` tiene {len(bq_schema)}: "
+                                                     f"revisa que la tabla se haya creado como copia de la de MX y que el layout del archivo no haya cambiado.")
                                 processed_df_A.columns = [field.name for field in bq_schema]
                                 
                                 # 3. LA BARREDORA FINAL: Casteo estricto basado en el esquema de BQ
@@ -331,24 +378,26 @@ if map_category is not None:
                                 primary_keys_a = ['date_value', 'city_id', 'product_id'] 
                                     
                                 # 5. Upsert
-                                upsert_to_bigquery(client, processed_df_A, 'didi_db.Daily DB 100268', primary_keys_a)
+                                upsert_to_bigquery(client, processed_df_A, DESTINO_CFG["daily"], primary_keys_a)
                                     
-                            st.success("¡Base actualizada con éxito! Ceros duplicados y notaciones corregidas. 🎉")
+                            st.success(f"¡Base actualizada con éxito en `{DESTINO_CFG['daily']}`! Ceros duplicados y notaciones corregidas. 🎉")
                     except Exception as e: st.error(f"Error procesando {file.name}: {e}")
 
     # --- PESTAÑA 2 (Burn SoT) ---
     with tab2:
         with st.container(border=True):
-            st.markdown("### 📥 Carga de Burn SoT")
-            uploaded_files_B = st.file_uploader("Sube el reporte Burn", type=['csv', 'xlsx'], accept_multiple_files=True, key="up_B")
+            st.markdown(f"### 📥 Carga de Burn SoT → `{DESTINO_CFG['burn']}`")
+            if destino != "MX":
+                st.caption("En este destino se cargan todas las filas del archivo (no se filtra por MX) y CLUSTER = \"N/A\".")
+            uploaded_files_B = st.file_uploader("Sube el reporte Burn", type=['csv', 'xlsx'], accept_multiple_files=True, key=f"up_B_{destino}")
 
             if uploaded_files_B:
                 for file in uploaded_files_B:
                     try:
                         df_B = pd.read_excel(file) if file.name.endswith('.xlsx') else pd.read_csv(file)
-                        processed_df_B = process_dataframe_B(df_B, map_cluster, map_period)
+                        processed_df_B = process_dataframe_B(df_B, map_cluster, map_period, modo=destino)
 
-                        if st.button(f"🚀 Ejecutar Append hacia BigQuery", key=f"bq_B_{file.name}", type="primary"):
+                        if st.button(f"🚀 Ejecutar Append hacia BigQuery → {DESTINO_CFG['burn']}", key=f"bq_B_{destino}_{file.name}", type="primary"):
                             with st.spinner("Parseando esquema y subiendo a BigQuery..."):
                                 creds_dict = st.secrets["gcp_service_account"]
                                 client = bigquery.Client(credentials=service_account.Credentials.from_service_account_info(creds_dict), project=creds_dict["project_id"])
@@ -357,6 +406,9 @@ if map_category is not None:
                                     bigquery.SchemaField("subregion", "STRING"), bigquery.SchemaField("country_code", "STRING"), bigquery.SchemaField("city_id", "INTEGER"), bigquery.SchemaField("city_name", "STRING"), bigquery.SchemaField("year_calendar_week", "STRING"), bigquery.SchemaField("date_value", "DATE"), bigquery.SchemaField("product_id", "INTEGER"), bigquery.SchemaField("product_name", "STRING"), bigquery.SchemaField("gmv", "FLOAT"), bigquery.SchemaField("usd_fx", "FLOAT"), bigquery.SchemaField("drv_expan_cx", "FLOAT"), bigquery.SchemaField("drv_expan_mktp", "FLOAT"), bigquery.SchemaField("drv_expan_fleet", "FLOAT"), bigquery.SchemaField("drv_expan_shorterm", "FLOAT"), bigquery.SchemaField("drv_expan_other", "FLOAT"), bigquery.SchemaField("drv_expan_loyalty", "FLOAT"), bigquery.SchemaField("drv_expan_captain", "INTEGER"), bigquery.SchemaField("drv_expan_guru", "FLOAT"), bigquery.SchemaField("drv_react_longterm", "FLOAT"), bigquery.SchemaField("drv_react_fleet", "INTEGER"), bigquery.SchemaField("drv_react_cbcamp", "FLOAT"), bigquery.SchemaField("drv_activ_newgi", "FLOAT"), bigquery.SchemaField("drv_activ_dormant", "FLOAT"), bigquery.SchemaField("drv_activ_fleet", "FLOAT"), bigquery.SchemaField("drv_activ_newcamp", "FLOAT"), bigquery.SchemaField("drv_activ_referral", "FLOAT"), bigquery.SchemaField("drv_activ_paidmkt", "FLOAT"), bigquery.SchemaField("pax_react_longterm", "FLOAT"), bigquery.SchemaField("pax_activ_new", "FLOAT"), bigquery.SchemaField("pax_activ_dormant", "FLOAT"), bigquery.SchemaField("pax_activ_referral", "FLOAT"), bigquery.SchemaField("pax_activ_paid_mkt", "FLOAT"), bigquery.SchemaField("pax_activ_cross", "INTEGER"), bigquery.SchemaField("pax_expan_mktp", "FLOAT"), bigquery.SchemaField("pax_expan_other", "FLOAT"), bigquery.SchemaField("pax_expan_employee", "FLOAT"), bigquery.SchemaField("pax_expan_cx", "FLOAT"), bigquery.SchemaField("pax_expan_didiclub", "FLOAT"), bigquery.SchemaField("pax_expan_shorterm", "FLOAT"), bigquery.SchemaField("pax_expan_riderpass", "FLOAT"), bigquery.SchemaField("pax_expan_surgepass", "FLOAT"), bigquery.SchemaField("drv_expan_driverpass", "FLOAT"), bigquery.SchemaField("CLUSTER", "STRING"), bigquery.SchemaField("WEEKNUM", "INTEGER"), bigquery.SchemaField("calendar_week", "INTEGER"), bigquery.SchemaField("year", "INTEGER"), bigquery.SchemaField("period", "STRING"), bigquery.SchemaField("weekday_name", "STRING")
                                 ]
 
+                                if len(processed_df_B.columns) != len(bq_schema):
+                                    raise ValueError(f"El archivo procesado tiene {len(processed_df_B.columns)} columnas y el esquema de `{DESTINO_CFG['burn']}` tiene {len(bq_schema)}: "
+                                                     f"revisa que el archivo Burn tenga el mismo layout que el de MX.")
                                 processed_df_B.columns = [field.name for field in bq_schema]
                                 for field in bq_schema:
                                     col = field.name
@@ -366,16 +418,20 @@ if map_category is not None:
                                         processed_df_B[col] = pd.to_numeric(processed_df_B[col], errors='coerce').astype('float64')
                                     elif field.field_type == 'STRING': processed_df_B[col] = processed_df_B[col].astype(str).replace({'nan': '', 'NaN': '', 'None': ''})
 
-                                job = client.load_table_from_dataframe(processed_df_B, 'didi_db.Burn SoT', job_config=bigquery.LoadJobConfig(schema=bq_schema, write_disposition=bigquery.WriteDisposition.WRITE_APPEND))
+                                job = client.load_table_from_dataframe(processed_df_B, DESTINO_CFG["burn"], job_config=bigquery.LoadJobConfig(schema=bq_schema, write_disposition=bigquery.WriteDisposition.WRITE_APPEND))
                                 job.result() 
-                            st.success("¡Operación completada en BigQuery! 🎉")
+                            st.success(f"¡Operación completada en BigQuery (`{DESTINO_CFG['burn']}`)! 🎉")
                     except Exception as e: st.error(f"Error procesando {file.name}: {e}")
 
     # --- PESTAÑA 3 (Targets ROM) ---
     with tab3:
         with st.container(border=True):
-            st.markdown("### 🎯 Carga de Targets ROM")
-            uploaded_files_C = st.file_uploader("Sube el archivo ROM Planning (CSV)", type=['csv'], accept_multiple_files=True, key="up_C")
+            st.markdown("### 🎯 Carga de Targets ROM" + (f" → `{DESTINO_CFG['targets']}`" if DESTINO_CFG["targets"] else ""))
+            if DESTINO_CFG["targets"] is None:
+                st.info(f"El destino {DESTINO_CFG['label']} no tiene tabla de Targets: esta pestaña solo aplica a MX.")
+                uploaded_files_C = None
+            else:
+                uploaded_files_C = st.file_uploader("Sube el archivo ROM Planning (CSV)", type=['csv'], accept_multiple_files=True, key=f"up_C_{destino}")
 
             if uploaded_files_C:
                 for file in uploaded_files_C:
@@ -385,14 +441,14 @@ if map_category is not None:
                         
                         st.info(f"✅ Archivo transformado con nombres mapeados para BQ.")
 
-                        if st.button(f"🚀 Ejecutar Inteligente (Upsert) hacia BigQuery", key=f"bq_C_{file.name}", type="primary"):
+                        if st.button(f"🚀 Ejecutar Inteligente (Upsert) hacia BigQuery → {DESTINO_CFG['targets']}", key=f"bq_C_{destino}_{file.name}", type="primary"):
                             with st.spinner("Sincronizando Targets..."):
                                 creds_dict = st.secrets["gcp_service_account"]
                                 client = bigquery.Client(credentials=service_account.Credentials.from_service_account_info(creds_dict), project=creds_dict["project_id"])
                                 
                                 # PKs actualizadas usando el nombre de BQ
                                 primary_keys_c = ['city_name', 'calendar_week_old', 'year']
-                                upsert_to_bigquery(client, processed_df_C, 'didi_db.Targets SoT', primary_keys_c)
+                                upsert_to_bigquery(client, processed_df_C, DESTINO_CFG["targets"], primary_keys_c)
                                 
-                            st.success("¡Targets actualizados con éxito sin duplicados! 🎉")
+                            st.success(f"¡Targets actualizados con éxito en `{DESTINO_CFG['targets']}` sin duplicados! 🎉")
                     except Exception as e: st.error(f"Error procesando {file.name}: {e}")
